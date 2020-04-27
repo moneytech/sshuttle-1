@@ -177,9 +177,9 @@ parser.add_argument(
 )
 parser.add_argument(
     "-r", "--remote",
-    metavar="[USERNAME@]ADDR[:PORT]",
+    metavar="[USERNAME[:PASSWORD]@]ADDR[:PORT]",
     help="""
-    ssh hostname (and optional username) of remote %(prog)s server
+    ssh hostname (and optional username and password) of remote %(prog)s server
     """
 )
 parser.add_argument(
@@ -319,6 +319,37 @@ parser.add_argument(
     action="store_true",
     help="""
     (internal use only)
+    """
+)
+parser.add_argument(
+    "--sudoers",
+    action="store_true",
+    help="""
+    Add sshuttle to the sudoers for this user
+    """
+)
+parser.add_argument(
+    "--sudoers-no-modify",
+    action="store_true",
+    help="""
+    Prints the sudoers config to STDOUT and DOES NOT modify anything.
+    """
+)
+parser.add_argument(
+    "--sudoers-user",
+    default="",
+    help="""
+    Set the user name or group with %%group_name for passwordless operation.
+    Default is the current user.set ALL for all users. Only works with
+    --sudoers or --sudoers-no-modify option.
+    """
+)
+parser.add_argument(
+    "--sudoers-filename",
+    default="sshuttle_auto",
+    help="""
+    Set the file name for the sudoers.d file to be added. Default is
+    "sshuttle_auto". Only works with --sudoers or --sudoers-no-modify option.
     """
 )
 parser.add_argument(

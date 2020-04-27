@@ -6,6 +6,13 @@ import zlib
 import imp
 import subprocess as ssubprocess
 import shlex
+import ipaddress
+
+# ensure backwards compatiblity with python2.7
+try:
+    from urllib.parse import urlparse
+except ImportError:
+    from urlparse import urlparse
 
 import sshuttle.helpers as helpers
 from sshuttle.helpers import debug2
@@ -61,29 +68,65 @@ def empackage(z, name, data=None):
     return b'%s\n%d\n%s' % (name.encode("ASCII"), len(content), content)
 
 
+def parse_hostport(rhostport):
+    """
+    parses the given rhostport variable, looking like this:
+
+            [username[:password]@]host[:port]
+
+    if only host is given, can be a hostname, IPv4/v6 address or a ssh alias
+    from ~/.ssh/config
+
+    and returns a tuple (username, password, port, host)
+    """
+    # default port for SSH is TCP port 22
+    port = 22
+    username = None
+    password = None
+    host = rhostport
+
+    if "@" in host:
+        # split username (and possible password) from the host[:port]
+        username, host = host.split("@")
+        # Fix #410 bad username error detect
+        # username cannot contain an @ sign in this scenario
+        if ":" in username:
+            # this will even allow for the username to be empty
+            username, password = username.split(":")
+
+    if ":" in host:
+        # IPv6 address and/or got a port specified
+
+        # If it is an IPv6 adress with port specification,
+        # then it will look like: [::1]:22
+
+        try:
+            # try to parse host as an IP adress,
+            # if that works it is an IPv6 address
+            host = ipaddress.ip_address(host)
+        except ValueError:
+            # if that fails parse as URL to get the port
+            parsed = urlparse('//{}'.format(host))
+            try:
+                host = ipaddress.ip_address(parsed.hostname)
+            except ValueError:
+                # else if both fails, we have a hostname with port
+                host = parsed.hostname
+            port = parsed.port
+
+
+    if password is None or len(password) == 0:
+        password = None
+
+    return username, password, port, host
+
+
 def connect(ssh_cmd, rhostport, python, stderr, options):
-    portl = []
-
-    if re.sub(r'.*@', '', rhostport or '').count(':') > 1:
-        if rhostport.count(']') or rhostport.count('['):
-            result = rhostport.split(']')
-            rhost = result[0].strip('[')
-            if len(result) > 1:
-                result[1] = result[1].strip(':')
-                if result[1] != '':
-                    portl = ['-p', str(int(result[1]))]
-        # can't disambiguate IPv6 colons and a port number. pass the hostname
-        # through.
-        else:
-            rhost = rhostport
-    else:  # IPv4
-        host_port = (rhostport or '').rsplit(':', 1)
-        rhost = host_port[0]
-        if len(host_port) > 1:
-            portl = ['-p', str(int(host_port[1]))]
-
-    if rhost == '-':
-        rhost = None
+    username, password, port, host = parse_hostport(rhostport)
+    if username:
+        rhost = "{}@{}".format(username, host)
+    else:
+        rhost = host
 
     z = zlib.compressobj(1)
     content = readfile('sshuttle.assembler')
@@ -119,10 +162,18 @@ def connect(ssh_cmd, rhostport, python, stderr, options):
         else:
             pycmd = ("P=python3; $P -V 2>%s || P=python; "
                      "exec \"$P\" -c %s") % (os.devnull, quote(pyscript))
-            pycmd = ("exec /bin/sh -c %s" % quote(pycmd))
-        argv = (sshl +
-                portl +
-                [rhost, '--', pycmd])
+            pycmd = ("/bin/sh -c {}".format(quote(pycmd)))
+
+        if password is not None:
+            os.environ['SSHPASS'] = str(password)
+            argv = (["sshpass", "-e"] + sshl +
+                    ["-p", str(port)] +
+                    [rhost, '--', pycmd])
+
+        else:
+            argv = (sshl +
+                    ["-p", str(port)] +
+                    [rhost, '--', pycmd])
     (s1, s2) = socket.socketpair()
 
     def setup():
@@ -133,7 +184,6 @@ def connect(ssh_cmd, rhostport, python, stderr, options):
     debug2('executing: %r\n' % argv)
     p = ssubprocess.Popen(argv, stdin=s1a, stdout=s1b, preexec_fn=setup,
                           close_fds=True, stderr=stderr)
-    # No env: Would affect the entire sshuttle.
     os.close(s1a)
     os.close(s1b)
     s2.sendall(content)
